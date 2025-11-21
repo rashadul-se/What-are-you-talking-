@@ -99,14 +99,15 @@ class ZeroShotClassifier(TextProcessor):
 
 
 class FacultyExtractor:
-    """Extract faculty information"""
+    """Extract faculty information with improved detection"""
     
     def __init__(self, ner_processor: NERProcessor, classifier: ZeroShotClassifier):
         self.ner_processor = ner_processor
         self.classifier = classifier
         self.faculty_roles = [
             "Professor", "Associate Professor", "Assistant Professor", "Lecturer",
-            "Instructor", "Faculty Member", "Academic", "Researcher", "Educator"
+            "Instructor", "Faculty Member", "Academic", "Researcher", "Educator",
+            "Enterprise Strategist", "Author", "Expert", "Specialist"
         ]
     
     def extract(self, text: str) -> List[Dict]:
@@ -133,11 +134,18 @@ class FacultyExtractor:
                     hypothesis_template="This person is a {}."
                 )
                 
+                # IMPROVED: Lower confidence threshold and add top 3 roles
+                top_roles = list(zip(role_result['labels'], role_result['scores']))[:3]
+                
                 faculty_dict = {
                     'name': person['text'],
                     'ner_confidence': float(person['score']),
-                    'role': role_result['labels'][0] if 'error' not in role_result else 'Faculty',
-                    'role_confidence': float(role_result['scores'][0]) if 'error' not in role_result else 0.0,
+                    'primary_role': role_result['labels'][0] if 'error' not in role_result else 'Faculty',
+                    'primary_role_confidence': float(role_result['scores'][0]) if 'error' not in role_result else 0.0,
+                    'alternative_roles': [
+                        {'role': role, 'confidence': float(score)} 
+                        for role, score in top_roles[1:]
+                    ],
                     'context': person_context[:150]
                 }
                 faculty_list.append(faculty_dict)
@@ -146,7 +154,7 @@ class FacultyExtractor:
 
 
 class DepartmentExtractor:
-    """Extract department information"""
+    """Extract department and organization information"""
     
     def __init__(self, classifier: ZeroShotClassifier):
         self.classifier = classifier
@@ -155,13 +163,25 @@ class DepartmentExtractor:
             "Education", "Computing", "Mathematics", "Physics", "Chemistry",
             "Literature", "History", "Economics", "Psychology", "Sociology",
             "Management", "Organizational Studies", "Strategy", "Leadership",
-            "Finance", "Accounting", "Marketing", "Technology"
+            "Finance", "Accounting", "Marketing", "Technology", "Information Technology",
+            "Enterprise Strategy", "Digital Transformation"
         ]
     
     def extract(self, text: str) -> List[Dict]:
         """Extract departments from text"""
         departments = []
         sentences = re.split(r'[.!?]+', text)
+        
+        # Also check for company/organization names mentioned
+        org_pattern = r'\b(?:Amazon|Google|Microsoft|Apple|IBM|Facebook|Meta|AWS|Inc\.|Corp\.|Ltd\.|LLC)\b'
+        orgs = re.findall(org_pattern, text, re.IGNORECASE)
+        for org in orgs:
+            departments.append({
+                'name': org,
+                'type': 'Organization',
+                'confidence': 1.0,
+                'source_text': text[:150]
+            })
         
         for sentence in sentences:
             if len(sentence.strip()) < 10:
@@ -173,9 +193,11 @@ class DepartmentExtractor:
                 hypothesis_template="This sentence discusses the {} department or faculty area."
             )
             
-            if 'error' not in result and result['scores'][0] > 0.35:
+            # IMPROVED: Lowered threshold from 0.35 to 0.25 for better detection
+            if 'error' not in result and result['scores'][0] > 0.25:
                 departments.append({
                     'name': result['labels'][0],
+                    'type': 'Department/Faculty',
                     'confidence': float(result['scores'][0]),
                     'source_text': sentence.strip()[:150]
                 })
@@ -183,16 +205,17 @@ class DepartmentExtractor:
         # Remove duplicates, keep highest confidence
         unique_depts = {}
         for dept in departments:
-            if dept['name'] not in unique_depts:
-                unique_depts[dept['name']] = dept
-            elif dept['confidence'] > unique_depts[dept['name']]['confidence']:
-                unique_depts[dept['name']] = dept
+            key = dept['name'].lower()
+            if key not in unique_depts:
+                unique_depts[key] = dept
+            elif dept['confidence'] > unique_depts[key]['confidence']:
+                unique_depts[key] = dept
         
         return list(unique_depts.values())
 
 
 class SubjectExtractor:
-    """Extract subject and course information"""
+    """Extract subject, course, and concept information"""
     
     def __init__(self, classifier: ZeroShotClassifier):
         self.classifier = classifier
@@ -201,7 +224,9 @@ class SubjectExtractor:
             "Leadership", "Organizational Behavior", "Organizational Design",
             "Organizational Transformation", "Decision Making", "Organizational Strategy",
             "Systems Thinking", "Complex Systems", "Organizational Patterns",
-            "Finance", "Marketing", "Data Science", "Machine Learning", "Accounting"
+            "Finance", "Marketing", "Data Science", "Machine Learning", "Accounting",
+            "Adaptability", "Innovation", "Digital Transformation", "Organizational Agility",
+            "Distributed Decision-Making", "Antipatterns", "Business Transformation"
         ]
     
     def extract(self, text: str) -> List[Dict]:
@@ -211,9 +236,20 @@ class SubjectExtractor:
         
         # Extract bullet points and special topics
         bullet_points = re.findall(r'[•*\-]\s+(.+?)(?=\n|$)', text)
-        model_patterns = re.findall(r'(?:Model|Framework|Approach|Concept|Course|Subject)[\s:]+([^.\n]+)', text, re.IGNORECASE)
         
-        all_sentences = sentences + bullet_points + model_patterns
+        # IMPROVED: Enhanced pattern matching for models and concepts
+        model_patterns = re.findall(
+            r'(?:Model|Framework|Approach|Concept|Course|Subject|Organization|Org)[\s:]+([^.\n]+)',
+            text, re.IGNORECASE
+        )
+        
+        # Add keyword extraction for common org/transformation concepts
+        keywords = re.findall(
+            r'\b((?:adaptive|intelligent|distributed|complex|nonlinear|antipattern|engagement|innovation)[^\s,\.]*)\b',
+            text, re.IGNORECASE
+        )
+        
+        all_sentences = sentences + bullet_points + model_patterns + keywords
         
         for sentence in all_sentences:
             if len(sentence.strip()) < 8:
@@ -225,14 +261,15 @@ class SubjectExtractor:
                 hypothesis_template="This is a topic in {}."
             )
             
-            if 'error' not in result and result['scores'][0] > 0.30:
+            # IMPROVED: Lowered threshold from 0.30 to 0.20 for better detection
+            if 'error' not in result and result['scores'][0] > 0.20:
                 subjects.append({
                     'topic': sentence.strip()[:150],
                     'category': result['labels'][0],
                     'confidence': float(result['scores'][0])
                 })
         
-        # Remove duplicates
+        # Remove duplicates, keep highest confidence
         unique_subjects = {}
         for subj in subjects:
             key = subj['topic'].lower()
@@ -276,10 +313,11 @@ class ResultsFormatter:
         df = pd.DataFrame([
             {
                 'Name': f['name'],
-                'Role': f['role'],
-                'NER Confidence': f"{f['ner_confidence']:.2%}",
-                'Role Confidence': f"{f['role_confidence']:.2%}",
-                'Context': f['context'][:60]
+                'Primary Role': f['primary_role'],
+                'Role Confidence': f"{f['primary_role_confidence']:.1%}",
+                'NER Confidence': f"{f['ner_confidence']:.1%}",
+                'Alternative Roles': ', '.join([r['role'] for r in f['alternative_roles']]),
+                'Context': f['context'][:50]
             }
             for f in faculty
         ])
@@ -293,9 +331,10 @@ class ResultsFormatter:
         
         df = pd.DataFrame([
             {
-                'Department': d['name'],
-                'Confidence': f"{d['confidence']:.2%}",
-                'Source': d['source_text'][:70]
+                'Name': d['name'],
+                'Type': d.get('type', 'Department'),
+                'Confidence': f"{d['confidence']:.1%}",
+                'Source': d['source_text'][:60]
             }
             for d in departments
         ])
@@ -307,14 +346,13 @@ class ResultsFormatter:
         if not subjects:
             return pd.DataFrame()
         
-        # Sort by confidence
         sorted_subjects = sorted(subjects, key=lambda x: x['confidence'], reverse=True)
         
         df = pd.DataFrame([
             {
                 'Topic': s['topic'][:60],
                 'Category': s['category'],
-                'Confidence': f"{s['confidence']:.2%}"
+                'Confidence': f"{s['confidence']:.1%}"
             }
             for s in sorted_subjects
         ])
@@ -330,7 +368,7 @@ def main():
         initial_sidebar_state="expanded"
     )
     
-    st.title("📚 Academic Information Extractor")
+    st.title("📚 Academic Information Extractor (v2 - Improved)")
     st.markdown("---")
     
     if not TRANSFORMERS_AVAILABLE:
@@ -350,6 +388,16 @@ def main():
             "Choose Input Method:",
             ["Paste Article Text", "Upload Text File", "Sample Article"]
         )
+        
+        st.markdown("---")
+        st.subheader("📊 Improvements v2")
+        st.markdown("""
+        - ✅ Lower confidence thresholds
+        - ✅ Alternative role suggestions
+        - ✅ Organization detection (AWS, etc)
+        - ✅ Better concept extraction
+        - ✅ Enhanced keyword matching
+        """)
     
     # Main content
     col1, col2 = st.columns([2, 1])
@@ -374,11 +422,11 @@ def main():
         
         else:  # Sample Article
             sample_articles = {
-                "Sample 1 - Business Management": """Dr. James Smith and Professor Maria Garcia are faculty members in the Faculty of Business and Management Studies. They specialize in Strategic Management and Organizational Transformation. Their research covers the Octopus Organization Model, Change Management, and Distributed Decision-Making frameworks. They teach advanced courses on organizational design, sensing change in real time, recognizing complex systems, and identifying organizational antipatterns. The department also offers MBA programs in Finance and Accounting.""",
+                "Sample 1 - Octopus Organization": """As companies pour trillions into transformation efforts, few see lasting results. That's because most organizations approach change like machines—rigidly, predictably, and from the top down, argue Amazon Web Services enterprise strategists Jana Werner and Phil Le-Brun. In this article, adapted from their forthcoming book The Octopus Organization (Harvard Business Review Press, 2025), the authors offer a radically different paradigm: the Octopus Org. Modeled after one of nature's most adaptive and intelligent creatures, the Octopus Org distributes decision-making, senses change in real time, and continually adapts. Unlike "Tin Man" organizations that view business as complicated but controllable, Octopus Orgs recognize the truly complex nature of today's world, which is nonlinear, uncertain, and constantly evolving. The key to thriving in it is to change antipatterns—deep-seated habits that compromise clarity, ownership, and curiosity.""",
                 
-                "Sample 2 - Organizational Studies": """In the Department of Organizational Studies and Psychology, Professor Elena Rodriguez leads research on organizational theory and leadership development. The curriculum emphasizes Strategic Management & Adaptation, organizational behavior analysis, and frameworks for understanding complex systems. Dr. Thomas Wright and Dr. Sarah Chen explore change management strategies and scaling organizational changes. Students engage with real-world case studies in strategy and finance.""",
+                "Sample 2 - Business Management": """Dr. James Smith and Professor Maria Garcia are faculty members in the Faculty of Business and Management Studies. They specialize in Strategic Management and Organizational Transformation. Their research covers change management and distributed decision-making frameworks. They teach advanced courses on organizational design and complex systems thinking. The department also offers MBA programs in Finance and Accounting.""",
                 
-                "Sample 3 - Management & Technology": """The Faculty of Management and Technology offers programs integrating organizational transformation with data science. Professor Michael Chen and Dr. Lisa Anderson teach courses combining organizational design with machine learning applications. Topics include the Octopus Organization Model, distributed decision-making, and data science applications. The program includes specializations in Finance, Marketing, and Strategic Management."""
+                "Sample 3 - Organizational Studies": """In the Department of Organizational Studies and Psychology, Professor Elena Rodriguez leads research on organizational theory and leadership development. The curriculum emphasizes Strategic Management, organizational behavior analysis, and frameworks for understanding complex systems. Dr. Thomas Wright and Dr. Sarah Chen explore change management strategies and scaling organizational changes."""
             }
             
             selected_sample = st.selectbox("Select a sample:", list(sample_articles.keys()))
@@ -392,7 +440,6 @@ def main():
             st.metric("Words", len(article_text.split()))
             st.metric("Sentences", len(re.split(r'[.!?]+', article_text)))
     
-    # Extract button
     st.markdown("---")
     
     if st.button("🔍 Extract Information", use_container_width=True, type="primary"):
@@ -403,11 +450,9 @@ def main():
         with st.spinner("Extracting information... This may take a moment"):
             results = st.session_state.extractor.extract_all(article_text)
         
-        # Display Results
         st.markdown("---")
         st.header("📋 Extraction Results")
         
-        # Tabs for different result types
         tab1, tab2, tab3, tab4 = st.tabs(["👥 Faculty", "🏢 Departments", "📖 Subjects", "📊 JSON Export"])
         
         with tab1:
@@ -419,7 +464,7 @@ def main():
                 st.info("No faculty members extracted")
         
         with tab2:
-            st.subheader("Departments")
+            st.subheader("Departments & Organizations")
             dept_df = st.session_state.formatter.format_department_table(results['departments'])
             if not dept_df.empty:
                 st.dataframe(dept_df, use_container_width=True)
@@ -445,7 +490,6 @@ def main():
                 mime="application/json"
             )
         
-        # Summary statistics
         st.markdown("---")
         col1, col2, col3 = st.columns(3)
         with col1:
