@@ -379,7 +379,7 @@ class ResultsFormatter:
 
 def main():
     st.set_page_config(
-        page_title="Academic Information Extractor",
+        page_title="Academic Courses You Requested",
         page_icon="📚",
         layout="wide",
         initial_sidebar_state="expanded"
