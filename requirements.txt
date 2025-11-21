@@ -1,6 +1,6 @@
-streamlit==1.31.0
-transformers==4.36.2
-torch==2.2.0
-pandas==2.1.4
-sentencepiece==0.1.99
-huggingface-hub==0.20.1
+streamlit==1.42.0
+transformers==4.46.0
+torch==2.5.0
+pandas==2.2.0
+numpy==1.26.4
+sentencepiece==0.2.0
